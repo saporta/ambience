@@ -6,8 +6,8 @@ let _duration = 0;
 
 export async function initAudio() {
   const [rawBuf, meta] = await Promise.all([
-    fetch('/deepdeckard.wav').then(r => r.arrayBuffer()),
-    fetch('/audio-data.json').then(r => r.json()),
+    fetch(`${import.meta.env.BASE_URL}deepdeckard.wav`).then(r => r.arrayBuffer()),
+    fetch(`${import.meta.env.BASE_URL}audio-data.json`).then(r => r.json()),
   ]);
 
   audioCtx = new AudioContext();

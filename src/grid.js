@@ -64,7 +64,7 @@ const YELLOW = new THREE.Color(1, 1, 0);
 export function getGridColor() { return uGridColor.value; }
 
 export function loadGrid(scene) {
-  new GLTFLoader().load('/grid.glb', (gltf) => {
+  new GLTFLoader().load(`${import.meta.env.BASE_URL}grid.glb`, (gltf) => {
     gltf.scene.traverse((child) => {
       if (child.isMesh) {
         child.material = new THREE.ShaderMaterial({

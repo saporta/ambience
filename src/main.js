@@ -64,3 +64,37 @@ overlay.addEventListener('click', async () => {
   initTiming(duration, events);
   requestAnimationFrame(animate);
 }, { once: true });
+
+const recordButton = document.createElement('button');
+recordButton.innerText = 'Record 30s';
+recordButton.style.cssText = 'position: absolute; top: 20px; left: 20px; z-index: 100; padding: 10px; cursor: pointer;';
+document.body.appendChild(recordButton);
+
+recordButton.addEventListener('click', () => {
+  const stream = renderer.domElement.captureStream(60);
+  const mediaRecorder = new MediaRecorder(stream, { 
+      mimeType: 'video/webm; codecs=vp9',
+      videoBitsPerSecond: 25000000
+  });
+  
+  const chunks = [];
+  mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+  
+  mediaRecorder.onstop = () => {
+    const blob = new Blob(chunks, { type: 'video/webm' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.style.display = 'none';
+    a.href = url;
+    a.download = 'wind-loop.webm';
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    recordButton.innerText = 'Record 30s';
+  };
+
+  mediaRecorder.start();
+  recordButton.innerText = 'Recording...';
+
+  setTimeout(() => mediaRecorder.stop(), 30000);
+});
