@@ -1,8 +1,10 @@
-let audioCtx  = null;
-let analyser  = null;
-let freqData  = null;
-let startTime = 0;
-let _duration = 0;
+let audioCtx   = null;
+let analyser   = null;
+let freqData   = null;
+let startTime  = 0;
+let _duration  = 0;
+let decodedBuf = null;
+let currentSrc = null;
 
 export async function initAudio() {
   const [rawBuf, meta] = await Promise.all([
@@ -10,30 +12,46 @@ export async function initAudio() {
     fetch(`${import.meta.env.BASE_URL}audio-data.json`).then(r => r.json()),
   ]);
 
-  audioCtx = new AudioContext();
-  const decoded = await audioCtx.decodeAudioData(rawBuf);
-  _duration = decoded.duration;
+  audioCtx   = new AudioContext();
+  decodedBuf = await audioCtx.decodeAudioData(rawBuf);
+  _duration  = decodedBuf.duration;
 
   analyser = audioCtx.createAnalyser();
   analyser.fftSize = 2048;
   analyser.smoothingTimeConstant = 0.75;
   freqData = new Uint8Array(analyser.frequencyBinCount);
-
-  const src = audioCtx.createBufferSource();
-  src.buffer = decoded;
-  src.loop = true;
-  src.connect(analyser);
   analyser.connect(audioCtx.destination);
 
+  currentSrc = audioCtx.createBufferSource();
+  currentSrc.buffer = decodedBuf;
+  currentSrc.loop = false; // no auto-loop; main.js restarts at the right visual time
+  currentSrc.connect(analyser);
+
   startTime = audioCtx.currentTime;
-  src.start(0);
+  currentSrc.start(0);
 
   return { duration: _duration, events: meta.events };
+}
+
+// Called by main.js when the visual cycle resets so audio restarts from the top.
+export function restartAudio() {
+  if (!audioCtx || !decodedBuf) return;
+  try { currentSrc.stop(); } catch (_) {}
+  currentSrc = audioCtx.createBufferSource();
+  currentSrc.buffer = decodedBuf;
+  currentSrc.loop = false;
+  currentSrc.connect(analyser);
+  currentSrc.start(0);
 }
 
 export function getAudioTime() {
   if (!audioCtx) return 0;
   return (audioCtx.currentTime - startTime) % _duration;
+}
+
+export function getMonotonicAudioTime() {
+  if (!audioCtx) return 0;
+  return audioCtx.currentTime - startTime;
 }
 
 export function getRealtimeAudio() {

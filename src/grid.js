@@ -16,6 +16,8 @@ const fragmentShader = `
   uniform float uProgress;
   uniform float uSpin;
   uniform float uBass;
+  uniform float uFlash;
+  uniform float uHigh;
   uniform vec3  uGridColor;
   varying vec2  vUv;
   varying vec3  vWorldPos;
@@ -23,7 +25,7 @@ const fragmentShader = `
   const float R_OUTER = 217.2;
   const float R_CYL   = 4.886;
   const float Y_BASE  = 33.0;
-  const float Y_TOP   = 400.0;
+  const float Y_TOP   = 700.0;
   const float DISC_W  = 0.7;
 
   void main() {
@@ -47,7 +49,7 @@ const fragmentShader = `
     float topFade   = smoothstep(1.0, 0.96, flow);
     float fade      = outerFade * topFade;
 
-    float bassGlow = 1.0 + uBass * 0.7;
+    float bassGlow = 1.0 + uBass * 0.7 + uFlash * 5.5 + uHigh * 1.6;
     float alpha    = clamp(grid * covered * fade * bassGlow, 0.0, 1.0);
     gl_FragColor   = vec4(uGridColor, alpha);
   }
@@ -56,10 +58,17 @@ const fragmentShader = `
 const uProgress  = { value: 0.0 };
 const uSpin      = { value: 0.0 };
 const uBass      = { value: 0.0 };
+const uFlash     = { value: 0.0 };
+const uHigh      = { value: 0.0 };
 const uGridColor = { value: new THREE.Color(1, 1, 1) };
 
 const WHITE  = new THREE.Color(1, 1, 1);
 const YELLOW = new THREE.Color(1, 1, 0);
+const CYAN   = new THREE.Color(1.0, 0.85, 0.0);
+
+// Sharp cyan grid flash window (absolute cycleT seconds).
+const CYAN_FLASH_START = 1.0;
+const CYAN_FLASH_END   = 1.5;
 
 export function getGridColor() { return uGridColor.value; }
 
@@ -68,7 +77,7 @@ export function loadGrid(scene) {
     gltf.scene.traverse((child) => {
       if (child.isMesh) {
         child.material = new THREE.ShaderMaterial({
-          uniforms: { uProgress, uSpin, uBass, uGridColor },
+          uniforms: { uProgress, uSpin, uBass, uFlash, uHigh, uGridColor },
           vertexShader,
           fragmentShader,
           transparent: true,
@@ -93,8 +102,28 @@ export function updateGrid(cycleT, audioData) {
   const bass = audioData?.bass ?? 0;
   uBass.value += (bass - uBass.value) * 0.15;
 
-  // Yellow flash on high-freq spike (sparkle)
-  const high   = audioData?.high ?? 0;
-  const target = high > 0.75 ? YELLOW : WHITE;
-  uGridColor.value.lerp(target, high > 0.75 ? 0.35 : 0.12);
+  // Smooth high for sparkle — drives both alpha boost and yellow color blend
+  const high = audioData?.high ?? 0;
+  uHigh.value += (high - uHigh.value) * 0.28;
+
+  // Cyan flash: smoothstepped window with soft 0.15s ramps at each edge,
+  // then low-pass filtered for a natural in/out instead of a hard cut.
+  const ramp        = 0.15;
+  const dur         = CYAN_FLASH_END - CYAN_FLASH_START;
+  const inside      = cycleT >= CYAN_FLASH_START && cycleT < CYAN_FLASH_END;
+  let flashTarget   = 0;
+  if (inside) {
+    const tIn  = Math.min(1, (cycleT - CYAN_FLASH_START) / ramp);
+    const tOut = Math.min(1, (CYAN_FLASH_END  - cycleT) / ramp);
+    const a    = Math.min(tIn, tOut, dur > ramp * 2 ? 1 : 0.7);
+    flashTarget = a * a * (3 - 2 * a);
+  }
+  uFlash.value += (flashTarget - uFlash.value) * 0.30;
+
+  // Sparkle color: white at rest, eased toward yellow as smoothed high-freq energy rises.
+  const sparkleAmt = Math.max(0, Math.min(1, (uHigh.value - 0.35) / 0.55));
+  uGridColor.value.copy(WHITE).lerp(YELLOW, sparkleAmt);
+
+  // Cyan blends on top of the audio-driven color
+  uGridColor.value.lerp(CYAN, uFlash.value);
 }

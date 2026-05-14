@@ -26,6 +26,8 @@ const DistortionShader = {
     uBass:      { value: 0 },
     uHigh:      { value: 0 },
     uMid:       { value: 0 },
+    uNoise:     { value: 0 }, // 0..1, intensifies static during CAM_MID→CAM_END
+    uFade:      { value: 1 }, // 1=full color, 0=black (fade-out after audio ends)
   },
 
   vertexShader: `
@@ -44,6 +46,8 @@ const DistortionShader = {
     uniform float uBass;
     uniform float uHigh;
     uniform float uMid;
+    uniform float uNoise;
+    uniform float uFade;
     varying vec2 vUv;
 
     float hash(vec2 p) {
@@ -82,8 +86,10 @@ const DistortionShader = {
 
       // ── SAMPLING ──────────────────────────────────────────────────
 
-      // Chromatic aberration
-      float ca = 0.001 + uAmplitude * 0.007 + uMid * 0.004;
+      // Chromatic aberration — original strength, with a fast pulse that
+      // only kicks in as uNoise (CAM_MID→CAM_END progress) ramps to 1.
+      float caPulse = 0.5 + 0.5 * sin(uTime * 14.0);
+      float ca = 0.001 + uAmplitude * 0.007 + uMid * 0.004 + (uNoise* 0.3) * caPulse * 0.030;
       float r  = texture2D(tDiffuse, uv + vec2( ca, 0.0)).r;
       float g  = texture2D(tDiffuse, uv             ).g;
       float b  = texture2D(tDiffuse, uv - vec2( ca, 0.0)).b;
@@ -107,6 +113,10 @@ const DistortionShader = {
       // Grain (high-freq)
       col += (hash(uv + fract(uTime * 0.29)) * 2.0 - 1.0) * uHigh * 0.07;
 
+      // Climax static — heavy noise field that intensifies via uNoise (CAM_MID→CAM_END)
+      float climaxN = hash(uv * 1.8 + fract(uTime * 13.7)) * 2.0 - 1.0;
+      col += climaxN * uNoise * 0.5;
+
       // VHS warm grade: slight yellowing + 12 % desaturation
       col.r *= 1.05;
       col.b *= 0.87;
@@ -124,7 +134,7 @@ const DistortionShader = {
       col.g = floor(col.g * levels + threshold) / levels;
       col.b = floor(col.b * levels + threshold) / levels;
 
-      gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+      gl_FragColor = vec4(clamp(col * uFade, 0.0, 1.0), 1.0);
     }
   `,
 };
@@ -143,7 +153,7 @@ export function initPost(renderer, scene, camera, W, H) {
 
 const _s = { amp: 0, bass: 0, high: 0, mid: 0 };
 
-export function updatePost(audioData, time) {
+export function updatePost(audioData, time, noise = 0, fade = 1) {
   _s.amp  += ((audioData?.amplitude ?? 0) - _s.amp)  * 0.18;
   _s.bass += ((audioData?.bass      ?? 0) - _s.bass) * 0.14;
   _s.high += ((audioData?.high      ?? 0) - _s.high) * 0.28;
@@ -155,4 +165,6 @@ export function updatePost(audioData, time) {
   u.uBass.value      = _s.bass;
   u.uHigh.value      = _s.high;
   u.uMid.value       = _s.mid;
+  u.uNoise.value     = noise;
+  u.uFade.value      = fade;
 }

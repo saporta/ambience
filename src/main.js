@@ -3,14 +3,15 @@ import * as THREE from 'three';
 import { camera, updateCamera } from './cam.js';
 import { loadGrid, updateGrid, getGridColor } from './grid.js';
 import { sphere, updateSphere } from './sphere.js';
-import { initAudio, getAudioTime, getRealtimeAudio } from './audio.js';
-import { initTiming } from './timing.js';
+import { initAudio, getRealtimeAudio, getMonotonicAudioTime, restartAudio } from './audio.js';
+import { loadEye, updateEye } from './eye.js';
+import { initTiming, computeUpT, timing } from './timing.js';
 import { initPost, updatePost } from './post.js';
 
 const canvas = document.getElementById('canvas');
 const W = 1920, H = 1080;
 
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(1);
 renderer.setSize(W, H);
 
@@ -27,22 +28,54 @@ const ambientLight = new THREE.AmbientLight(0xffffff, 0.04);
 scene.add(ambientLight);
 
 loadGrid(scene);
+loadEye(scene);
 scene.add(sphere);
 
 const composer = initPost(renderer, scene, camera, W, H);
 
+let audioDuration = 0;
+const HOLD_SECS   = 3.0; // seconds to hold at end before visual cycle resets
+let lastCycleNum  = 0;
+
 function animate(t) {
   requestAnimationFrame(animate);
-  const time      = t * 0.001;
-  const cycleT    = getAudioTime();
+  const time  = t * 0.001;
+  const mono  = getMonotonicAudioTime();
+  const visualCycle = audioDuration + HOLD_SECS;
+  const cycleNum = audioDuration > 0 ? Math.floor(mono / visualCycle) : 0;
+  const rawT     = audioDuration > 0 ? mono % visualCycle : 0;
+  const cycleT   = Math.min(rawT, audioDuration);
+
+  // Restart audio from the top each time the visual cycle resets
+  if (cycleNum > lastCycleNum) {
+    lastCycleNum = cycleNum;
+    restartAudio();
+  }
   const audioData = getRealtimeAudio();
+
+  const holdT = Math.max(0, rawT - audioDuration); // 0 during audio; 0→HOLD_SECS during hold
 
   updateCamera(cycleT);
   updateGrid(cycleT, audioData);
-  updateSphere(cycleT, camera.position.y, audioData);
-  updatePost(audioData, time);
+  updateSphere(cycleT, camera.position.y, audioData, holdT);
+  updateEye(cycleT, camera.position, holdT);
 
-  // Light color follows grid color (white → yellow on sparkle)
+  // CAM_MID → CAM_END progress: drives the static/noise intensification.
+  const upT = computeUpT(cycleT);
+
+  // Background fade (black → white): starts BG_DELAY seconds after upDelay,
+  // but still finishes at upEnd. Same end time, later start.
+  const BG_DELAY = 1.0;
+  const bgStart  = timing.upDelay + BG_DELAY;
+  const bgRaw    = Math.max(0, Math.min(1, (cycleT - bgStart) / Math.max(0.01, timing.upEnd - bgStart)));
+  const bgT      = bgRaw * bgRaw * (3 - 2 * bgRaw); // smoothstep
+  scene.background.setScalar(bgT);
+
+  // Once audio ends, fade the whole screen to black over 1s via the post pass.
+  const FADE_OUT_DUR = 1.0;
+  const fade = 1 - Math.max(0, Math.min(1, holdT / FADE_OUT_DUR));
+  updatePost(audioData, time, upT, fade);
+
   gridLight.color.copy(getGridColor());
 
   composer.render();
@@ -61,40 +94,7 @@ document.body.appendChild(overlay);
 overlay.addEventListener('click', async () => {
   overlay.remove();
   const { duration, events } = await initAudio();
+  audioDuration = duration; // used by hold-loop in animate
   initTiming(duration, events);
   requestAnimationFrame(animate);
 }, { once: true });
-
-const recordButton = document.createElement('button');
-recordButton.innerText = 'Record 30s';
-recordButton.style.cssText = 'position: absolute; top: 20px; left: 20px; z-index: 100; padding: 10px; cursor: pointer;';
-document.body.appendChild(recordButton);
-
-recordButton.addEventListener('click', () => {
-  const stream = renderer.domElement.captureStream(60);
-  const mediaRecorder = new MediaRecorder(stream, { 
-      mimeType: 'video/webm; codecs=vp9',
-      videoBitsPerSecond: 25000000
-  });
-  
-  const chunks = [];
-  mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-  
-  mediaRecorder.onstop = () => {
-    const blob = new Blob(chunks, { type: 'video/webm' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.style.display = 'none';
-    a.href = url;
-    a.download = 'wind-loop.webm';
-    document.body.appendChild(a);
-    a.click();
-    window.URL.revokeObjectURL(url);
-    recordButton.innerText = 'Record 30s';
-  };
-
-  mediaRecorder.start();
-  recordButton.innerText = 'Recording...';
-
-  setTimeout(() => mediaRecorder.stop(), 30000);
-});
